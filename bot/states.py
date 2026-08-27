@@ -10,6 +10,7 @@ class NewTraining(StatesGroup):
     route = State()
     date = State()
     time = State()
+    details = State()
     confirm = State()
 
 
@@ -20,6 +21,11 @@ class NewRoute(StatesGroup):
     distance = State()
     elevation = State()
     map_url = State()
+    waypoints = State()
+
+
+class RouteDescribe(StatesGroup):
+    waypoints = State()
 
 
 class CancelTraining(StatesGroup):

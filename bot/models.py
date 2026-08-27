@@ -58,6 +58,8 @@ class Route(Base):
     distance_km: Mapped[float] = mapped_column(Float)
     elevation_m: Mapped[int] = mapped_column(Integer, default=0)
     map_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # текстовое описание маршрута: доп. точки, покрытие, где вода
+    waypoints: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -69,6 +71,11 @@ class Training(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     status: Mapped[str] = mapped_column(String(16), default=TrainingStatus.planned.value)
     cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # оформление анонса
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_file_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     announcement_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     announcement_message_id: Mapped[int | None] = mapped_column(

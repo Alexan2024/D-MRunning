@@ -2,10 +2,11 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
+from bot import texts
 from bot.db import Session
 from bot.models import Rsvp, RsvpStatus, TrainingStatus
-from bot.services import refresh_announcement
-from bot.utils import get_training, get_user
+from bot.services import notify_admins
+from bot.utils import get_training, get_user, going_count
 
 router = Router()
 
@@ -45,15 +46,21 @@ async def toggle_rsvp(callback: CallbackQuery):
                     status=RsvpStatus.going.value,
                 )
             )
-            note = "Записал. Придёшь — отметься на месте."
+            joined, note = True, "Записал. Придёшь — отметься на месте."
         elif rsvp.status == RsvpStatus.going.value:
             rsvp.status = RsvpStatus.declined.value
-            note = "Убрал из списка."
+            joined, note = False, "Убрал из списка."
         else:
             rsvp.status = RsvpStatus.going.value
-            note = "Снова записал."
+            joined, note = True, "Снова записал."
 
         await session.commit()
-        await refresh_announcement(callback.bot, session, training)
+
+        # анонс намеренно не трогаем: счётчик записавшихся публично не виден
+        total = await going_count(session, training_id)
+        admin_text = texts.rsvp_admin_notice(
+            user.name, user.district, training, total, joined
+        )
 
     await callback.answer(note)
+    await notify_admins(callback.bot, admin_text)

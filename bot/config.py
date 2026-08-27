@@ -26,6 +26,10 @@ ADMIN_IDS = {
     if x.strip()
 }
 
+# Чат админов для уведомлений о записях. Если не задан, уведомления
+# уходят в личку каждому из ADMIN_IDS.
+ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0") or 0)
+
 TZ = ZoneInfo(os.environ.get("CLUB_TZ", "Europe/Moscow"))
 
 # Напоминание накануне уходит в этот час по клубному времени

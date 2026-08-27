@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from bot.models import Route, Training
 from bot.utils import fmt_date, fmt_datetime, fmt_time
 
@@ -25,28 +27,40 @@ def route_line(route: Route) -> str:
     return " · ".join(parts)
 
 
-def announcement(training: Training, going_count: int) -> str:
-    route = training.route
+def build_announcement(
+    route: Route,
+    starts_at: datetime,
+    description: str | None = None,
+) -> str:
+    """Публичный анонс. Счётчик записавшихся сюда намеренно не попадает."""
     lines = [
-        f"🏃 <b>Тренировка — {fmt_date(training.starts_at)}, "
-        f"{fmt_time(training.starts_at)}</b>",
+        f"🏃 <b>Тренировка — {fmt_date(starts_at)}, {fmt_time(starts_at)}</b>",
         "",
         f"<b>{route.title}</b>",
         route_line(route),
     ]
-    place = "📍 " + (route.start_note or "точка старта на карте ниже")
-    lines.append(place)
-    lines.append("")
-    lines.append(f"Идут: <b>{going_count}</b>")
+
+    if description:
+        lines += ["", description]
+
+    lines += ["", f"📍 <b>Старт:</b> {route.start_note or 'точка на карте ниже'}"]
+
+    if route.waypoints:
+        lines += ["", f"<b>Маршрут:</b>\n{route.waypoints}"]
+
+    lines += ["", "Жми «Иду», если бежишь."]
     return "\n".join(lines)
 
 
+def announcement(training: Training) -> str:
+    return build_announcement(training.route, training.starts_at, training.description)
+
+
 def announcement_cancelled(training: Training) -> str:
-    route = training.route
     return (
         f"<s>🏃 Тренировка — {fmt_date(training.starts_at)}, "
         f"{fmt_time(training.starts_at)}</s>\n\n"
-        f"<s>{route.title}</s>\n\n"
+        f"<s>{training.route.title}</s>\n\n"
         f"<b>Отменена.</b> {training.cancel_reason or ''}".strip()
     )
 
@@ -86,4 +100,20 @@ def moved_notice(training: Training) -> str:
         f"Новые дата и время: <b>{fmt_datetime(training.starts_at)}</b>\n"
         f"{training.route.title}\n\n"
         "Запись сохранена. Если не получается — отметься в анонсе."
+    )
+
+
+def rsvp_admin_notice(
+    user_name: str,
+    district: str,
+    training: Training,
+    total: int,
+    joined: bool,
+) -> str:
+    sign = "➕" if joined else "➖"
+    verb = "идёт" if joined else "снялся"
+    return (
+        f"{sign} <b>{user_name}</b> ({district}) {verb} — "
+        f"{fmt_datetime(training.starts_at)}, {training.route.title}\n"
+        f"Всего идут: <b>{total}</b>"
     )

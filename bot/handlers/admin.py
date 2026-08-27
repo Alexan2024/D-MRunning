@@ -7,15 +7,15 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import keyboards as kb
+from bot import texts
 from bot.db import Session
 from bot.filters import AdminFilter
 from bot.models import Route, Training
-from bot.services import publish_announcement
-from bot.states import NewRoute, NewTraining
+from bot.services import publish_announcement, send_announcement
+from bot.states import NewRoute, NewTraining, RouteDescribe
 from bot.utils import (
     active_routes,
     fmt_date,
-    fmt_datetime,
     local_to_utc,
     now_utc,
     to_local,
@@ -44,11 +44,12 @@ async def routes_list(callback: CallbackQuery):
 
     b = InlineKeyboardBuilder()
     for r in routes:
-        b.button(text=f"🗑 {r.title}", callback_data=f"adm:route_off:{r.id}")
+        mark = "📝 " if r.waypoints else ""
+        b.button(text=f"{mark}{r.title}", callback_data=f"adm:route:{r.id}")
     b.button(text="➕ Новый маршрут", callback_data="adm:route_new")
     b.adjust(1)
 
-    text = "Маршруты:\n\n" + (
+    text = "Маршруты (📝 — есть описание):\n\n" + (
         "\n".join(
             f"• <b>{r.title}</b> — {r.distance_km:g} км, набор {r.elevation_m} м"
             for r in routes
@@ -57,6 +58,66 @@ async def routes_list(callback: CallbackQuery):
     )
     await callback.message.answer(text, reply_markup=b.as_markup())
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:route:"))
+async def route_card(callback: CallbackQuery):
+    route_id = int(callback.data.split(":")[2])
+    async with Session() as session:
+        route = await session.get(Route, route_id)
+    if route is None:
+        await callback.answer("Маршрут не найден.", show_alert=True)
+        return
+
+    b = InlineKeyboardBuilder()
+    b.button(text="📝 Описать маршрут", callback_data=f"adm:route_desc:{route.id}")
+    b.button(text="🗑 Скрыть маршрут", callback_data=f"adm:route_off:{route.id}")
+    b.adjust(1)
+
+    text = (
+        f"<b>{route.title}</b>\n"
+        f"{route.distance_km:g} км · набор {route.elevation_m} м\n"
+        f"📍 Старт: {route.start_note or '—'}\n\n"
+        f"<b>Описание маршрута:</b>\n{route.waypoints or 'пока нет'}"
+    )
+    await callback.message.answer(text, reply_markup=b.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("adm:route_desc:"))
+async def route_describe(callback: CallbackQuery, state: FSMContext):
+    route_id = int(callback.data.split(":")[2])
+    await state.set_state(RouteDescribe.waypoints)
+    await state.update_data(route_id=route_id)
+    await callback.message.answer(
+        "Опиши маршрут текстом — доп. точки, покрытие, где вода, "
+        "где разворот. Можно в несколько строк.\n\n"
+        "Например:\n"
+        "<i>2 км — мост, уходим направо\n"
+        "5 км — фонтан, вода\n"
+        "7 км — подъём, здесь можно сбросить темп</i>\n\n"
+        "Это описание попадёт во все будущие анонсы с этим маршрутом. "
+        "Отправь <code>-</code>, чтобы стереть описание."
+    )
+    await callback.answer()
+
+
+@router.message(RouteDescribe.waypoints, F.text)
+async def route_describe_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    value = message.text.strip()
+    async with Session() as session:
+        route = await session.get(Route, data["route_id"])
+        if route:
+            route.waypoints = None if value == "-" else value
+            await session.commit()
+            title = route.title
+        else:
+            title = "?"
+    await state.clear()
+    await message.answer(
+        f"Описание маршрута «{title}» обновлено.", reply_markup=kb.admin_menu()
+    )
 
 
 @router.callback_query(F.data.startswith("adm:route_off:"))
@@ -152,6 +213,17 @@ async def route_elevation(message: Message, state: FSMContext):
 @router.message(NewRoute.map_url, F.text)
 async def route_map(message: Message, state: FSMContext):
     url = message.text.strip()
+    await state.update_data(map_url=None if url == "-" else url)
+    await state.set_state(NewRoute.waypoints)
+    await message.answer(
+        "Описание маршрута — доп. точки, покрытие, где вода. "
+        "Попадёт в анонс. Или <code>-</code>, чтобы пропустить."
+    )
+
+
+@router.message(NewRoute.waypoints, F.text)
+async def route_waypoints(message: Message, state: FSMContext):
+    value = message.text.strip()
     data = await state.get_data()
 
     async with Session() as session:
@@ -162,7 +234,8 @@ async def route_map(message: Message, state: FSMContext):
             start_note=data.get("start_note"),
             distance_km=data["distance"],
             elevation_m=data["elevation"],
-            map_url=None if url == "-" else url,
+            map_url=data.get("map_url"),
+            waypoints=None if value == "-" else value,
         )
         session.add(route)
         await session.commit()
@@ -190,7 +263,7 @@ async def new_training(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(NewTraining.route)
     await callback.message.answer(
-        "<b>Шаг 1 из 4.</b> Маршрут:",
+        "<b>Шаг 1 из 5.</b> Маршрут:",
         reply_markup=kb.routes_kb(routes, "adm:pick_route"),
     )
     await callback.answer()
@@ -213,7 +286,7 @@ async def pick_route(callback: CallbackQuery, state: FSMContext):
     b.adjust(2)
 
     await callback.message.answer(
-        "<b>Шаг 2 из 4.</b> Дата (или пришли текстом в формате ДД.ММ):",
+        "<b>Шаг 2 из 5.</b> Дата (или пришли текстом в формате ДД.ММ):",
         reply_markup=b.as_markup(),
     )
     await callback.answer()
@@ -243,7 +316,7 @@ async def _ask_time(message: Message, state: FSMContext):
         b.button(text=t, callback_data=f"adm:pick_time:{t}")
     b.adjust(4)
     await message.answer(
-        "<b>Шаг 3 из 4.</b> Время (или пришли текстом ЧЧ:ММ):",
+        "<b>Шаг 3 из 5.</b> Время (или пришли текстом ЧЧ:ММ):",
         reply_markup=b.as_markup(),
     )
 
@@ -251,7 +324,7 @@ async def _ask_time(message: Message, state: FSMContext):
 @router.callback_query(NewTraining.time, F.data.startswith("adm:pick_time:"))
 async def pick_time(callback: CallbackQuery, state: FSMContext):
     await state.update_data(time=callback.data.split(":", 2)[2])
-    await _show_preview(callback.message, state)
+    await _ask_details(callback.message, state)
     await callback.answer()
 
 
@@ -264,6 +337,46 @@ async def type_time(message: Message, state: FSMContext):
         await message.answer("Не разобрал время. Формат: <code>19:30</code>")
         return
     await state.update_data(time=raw)
+    await _ask_details(message, state)
+
+
+async def _ask_details(message: Message, state: FSMContext):
+    await state.set_state(NewTraining.details)
+    await message.answer(
+        "<b>Шаг 4 из 5.</b> Описание тренировки.\n\n"
+        "Пришли текст, либо фото или гифку с подписью — подпись станет "
+        "описанием. Отправь <code>-</code>, если описание не нужно."
+    )
+
+
+@router.message(NewTraining.details, F.photo)
+async def details_photo(message: Message, state: FSMContext):
+    await state.update_data(
+        description=(message.caption or "").strip() or None,
+        media_file_id=message.photo[-1].file_id,
+        media_type="photo",
+    )
+    await _show_preview(message, state)
+
+
+@router.message(NewTraining.details, F.animation)
+async def details_animation(message: Message, state: FSMContext):
+    await state.update_data(
+        description=(message.caption or "").strip() or None,
+        media_file_id=message.animation.file_id,
+        media_type="animation",
+    )
+    await _show_preview(message, state)
+
+
+@router.message(NewTraining.details, F.text)
+async def details_text(message: Message, state: FSMContext):
+    value = message.text.strip()
+    await state.update_data(
+        description=None if value == "-" else value,
+        media_file_id=None,
+        media_type=None,
+    )
     await _show_preview(message, state)
 
 
@@ -282,14 +395,15 @@ async def _show_preview(message: Message, state: FSMContext):
     b.button(text="✖️ Отменить", callback_data="adm:abort")
     b.adjust(1)
 
-    preview = (
-        "<b>Шаг 4 из 4.</b> Проверь:\n\n"
-        f"<b>{fmt_datetime(starts_at)}</b>\n"
-        f"{route.title} · {route.distance_km:g} км"
-        + (f", набор {route.elevation_m} м" if route.elevation_m else "")
-        + f"\n📍 {route.start_note or '—'}"
+    await message.answer("<b>Шаг 5 из 5.</b> Так анонс увидят в чате:")
+    await send_announcement(
+        message.bot,
+        message.chat.id,
+        texts.build_announcement(route, starts_at, data.get("description")),
+        data.get("media_file_id"),
+        data.get("media_type"),
+        reply_markup=b.as_markup(),
     )
-    await message.answer(preview, reply_markup=b.as_markup())
 
 
 @router.callback_query(NewTraining.confirm, F.data == "adm:publish")
@@ -302,6 +416,9 @@ async def publish(callback: CallbackQuery, state: FSMContext):
             route_id=data["route_id"],
             starts_at=starts_at,
             created_by=callback.from_user.id,
+            description=data.get("description"),
+            media_file_id=data.get("media_file_id"),
+            media_type=data.get("media_type"),
         )
         session.add(training)
         await session.commit()
