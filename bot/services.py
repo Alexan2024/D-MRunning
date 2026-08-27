@@ -106,7 +106,13 @@ async def publish_announcement(
             reply_to_message_id=msg.message_id,
         )
     except TelegramBadRequest:
-        log.warning("Не удалось отправить локацию для тренировки %s", training.id)
+        # в каналах ответ на пост может не пройти — шлём локацию отдельным постом
+        try:
+            await bot.send_location(
+                CLUB_CHAT_ID, latitude=route.lat, longitude=route.lng
+            )
+        except TelegramBadRequest:
+            log.warning("Не удалось отправить локацию для тренировки %s", training.id)
 
 
 async def refresh_announcement(

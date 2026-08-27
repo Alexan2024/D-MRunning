@@ -17,8 +17,23 @@ DATABASE_URL = _clean_db_url(
     os.environ.get("DATABASE_URL") or "sqlite+aiosqlite:///./dom_running.db"
 )
 
-# ID группового чата клуба, куда постятся анонсы. Для супергрупп число отрицательное.
-CLUB_CHAT_ID = int(os.environ.get("CLUB_CHAT_ID", "0"))
+def _chat_id(raw: str):
+    """Принимает числовой ID (-1001234567890) или @username публичного канала."""
+    raw = (raw or "").strip()
+    if not raw:
+        return 0
+    if raw.startswith("@"):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+# Куда постятся анонсы: группа или канал.
+# Для супергрупп и каналов число отрицательное, вида -1001234567890.
+# Для публичного канала можно указать @username.
+CLUB_CHAT_ID = _chat_id(os.environ.get("CLUB_CHAT_ID", ""))
 
 ADMIN_IDS = {
     int(x)
@@ -28,7 +43,7 @@ ADMIN_IDS = {
 
 # Чат админов для уведомлений о записях. Если не задан, уведомления
 # уходят в личку каждому из ADMIN_IDS.
-ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0") or 0)
+ADMIN_CHAT_ID = _chat_id(os.environ.get("ADMIN_CHAT_ID", ""))
 
 TZ = ZoneInfo(os.environ.get("CLUB_TZ", "Europe/Moscow"))
 
